@@ -413,6 +413,8 @@ class BookDataManager:
                 try:
                     min_val = float(values[0])
                     max_val = float(values[1])
+                    if min_val > max_val:
+                        min_val, max_val = max_val, min_val
                     num_series = pd.to_numeric(series, errors="coerce")
                     return (num_series >= min_val) & (num_series <= max_val)
                 except (ValueError, TypeError):
@@ -490,6 +492,8 @@ class BookDataManager:
                 try:
                     min_val = float(values[0])
                     max_val = float(values[1])
+                    if min_val > max_val:
+                        min_val, max_val = max_val, min_val
                     num_field = float(field_val)
                     return min_val <= num_field <= max_val
                 except (ValueError, TypeError):
