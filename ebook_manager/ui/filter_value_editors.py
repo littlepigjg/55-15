@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from PyQt6.QtWidgets import (
-    QWidget, QHBoxLayout, QLineEdit, QSpinBox, QDoubleSpinBox,
-    QListWidget, QListWidgetItem
+    QWidget, QHBoxLayout, QVBoxLayout, QLineEdit, QSpinBox, QDoubleSpinBox,
+    QListWidget, QListWidgetItem, QCheckBox
 )
 from PyQt6.QtCore import pyqtSignal
 

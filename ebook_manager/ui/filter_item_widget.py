@@ -6,7 +6,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import pyqtSignal, Qt
 
 from ..data_manager import BookDataManager, FilterCondition
-from .filter_value_editors import create_value_editor, BaseValueEditor
+from .value_editors import create_value_editor, BaseValueEditor
 
 
 class FilterItemWidget(QWidget):
