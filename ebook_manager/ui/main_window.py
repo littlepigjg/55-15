@@ -5,7 +5,7 @@ from PyQt6.QtWidgets import (
     QStatusBar, QMessageBox, QTabWidget, QLabel, QApplication,
     QFileDialog
 )
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
 from PyQt6.QtGui import QAction, QIcon
 
 from ..models import BookMeta
@@ -14,6 +14,7 @@ from ..metadata_parser import MetadataParser
 from ..metadata_editor import MetadataEditor
 from ..network_source import NetworkSourceManager
 from ..converter import FormatConverter
+from ..data_manager import BookDataManager, FilterCondition
 
 from .scanner_panel import ScannerPanel
 from .book_table import BookTableWidget
@@ -21,13 +22,16 @@ from .edit_panel import MetadataEditPanel
 from .search_dialog import OnlineSearchDialog
 from .convert_dialog import ConvertDialog
 from .workers import ScanWorker, ParseWorker
+from .filter_panel import FilterPanel
+from .paginated_table import PaginatedBookTable
+from .export_dialog import ExportDialog
 
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("📚 电子书元数据管理器")
-        self.setMinimumSize(1200, 700)
+        self.setMinimumSize(1400, 800)
 
         self._books: list = []
         self._scanner = BookshelfScanner()
@@ -35,10 +39,17 @@ class MainWindow(QMainWindow):
         self._editor = MetadataEditor()
         self._source_manager = NetworkSourceManager()
         self._converter = FormatConverter()
+        self._data_manager = BookDataManager()
+
+        self._filter_timer = QTimer()
+        self._filter_timer.setSingleShot(True)
+        self._filter_timer.setInterval(300)
+        self._filter_timer.timeout.connect(self._apply_filters)
 
         self._init_ui()
         self._init_menu()
         self._init_statusbar()
+        self._data_manager.load_presets_from_file()
 
     def _init_ui(self):
         central = QWidget()
@@ -50,22 +61,37 @@ class MainWindow(QMainWindow):
         self.scanner_panel.scan_requested.connect(self._on_scan_requested)
         main_layout.addWidget(self.scanner_panel)
 
-        splitter = QSplitter(Qt.Orientation.Horizontal)
+        main_splitter = QSplitter(Qt.Orientation.Horizontal)
 
-        self.book_table = BookTableWidget()
+        self.filter_panel = FilterPanel(self._data_manager)
+        self.filter_panel.filter_changed.connect(self._on_filter_changed)
+        self.filter_panel.export_requested.connect(self._on_export_requested)
+        main_splitter.addWidget(self.filter_panel)
+
+        right_splitter = QSplitter(Qt.Orientation.Horizontal)
+
+        self.book_table = PaginatedBookTable()
         self.book_table.selection_changed.connect(self._on_selection_changed)
         self.book_table.edit_requested.connect(self._on_edit_requested)
         self.book_table.convert_requested.connect(self._on_convert_requested)
         self.book_table.search_meta_requested.connect(self._on_search_meta_requested)
-        splitter.addWidget(self.book_table)
+        self.book_table.page_changed.connect(self._on_page_changed)
+        self.book_table.page_size_changed.connect(self._on_page_size_changed)
+        self.book_table.search_edit.textChanged.connect(self._on_quick_search)
+        self.book_table.format_filter.currentTextChanged.connect(self._on_quick_search)
+        right_splitter.addWidget(self.book_table)
 
         self.edit_panel = MetadataEditPanel()
         self.edit_panel.save_requested.connect(self._on_save_metadata)
-        splitter.addWidget(self.edit_panel)
+        right_splitter.addWidget(self.edit_panel)
 
-        splitter.setStretchFactor(0, 3)
-        splitter.setStretchFactor(1, 1)
-        main_layout.addWidget(splitter)
+        right_splitter.setStretchFactor(0, 3)
+        right_splitter.setStretchFactor(1, 1)
+        main_splitter.addWidget(right_splitter)
+
+        main_splitter.setStretchFactor(0, 0)
+        main_splitter.setStretchFactor(1, 1)
+        main_layout.addWidget(main_splitter)
 
         self.setStyleSheet("""
             QMainWindow { background: #f5f6fa; }
@@ -178,8 +204,79 @@ class MainWindow(QMainWindow):
 
     def _on_parse_finished(self, books: list):
         self._books = books
+        self._data_manager.load_books(books)
         self.book_table.load_books(books)
+        self._apply_filters()
         self.statusBar().showMessage(f"已加载 {len(books)} 本电子书")
+
+    def _on_filter_changed(self):
+        self._filter_timer.start()
+
+    def _get_quick_search_conditions(self) -> list[FilterCondition]:
+        conditions = []
+        keyword = self.book_table.search_edit.text().lower()
+        fmt = self.book_table.format_filter.currentText()
+
+        if keyword:
+            conditions.append(
+                FilterCondition(
+                    field="title",
+                    operator="contains",
+                    values=[keyword],
+                    enabled=True
+                )
+            )
+            conditions.append(
+                FilterCondition(
+                    field="author",
+                    operator="contains",
+                    values=[keyword],
+                    enabled=True
+                )
+            )
+
+        if fmt != "全部格式":
+            conditions.append(
+                FilterCondition(
+                    field="file_format",
+                    operator="equals",
+                    values=[fmt.lower()],
+                    enabled=True
+                )
+            )
+
+        return conditions
+
+    def _apply_filters(self):
+        page = self.book_table.get_current_page()
+        page_size = self.book_table.get_page_size()
+        extra_conditions = self._get_quick_search_conditions()
+        result = self._data_manager.apply_filters(
+            page=page,
+            page_size=page_size,
+            extra_conditions=extra_conditions
+        )
+        self.book_table.update_from_result(result)
+        self.statusBar().showMessage(
+            f"筛选完成: {result.filtered_count}/{result.total_count} 本, 耗时 {result.elapsed_ms:.1f}ms"
+        )
+
+    def _on_page_changed(self, page: int):
+        self._apply_filters()
+
+    def _on_page_size_changed(self, page_size: int):
+        self._apply_filters()
+
+    def _on_export_requested(self):
+        if not self._books:
+            QMessageBox.information(self, "提示", "没有数据可导出")
+            return
+        extra_conditions = self._get_quick_search_conditions()
+        dialog = ExportDialog(self._data_manager, extra_conditions, self)
+        dialog.exec()
+
+    def _on_quick_search(self):
+        self._apply_filters()
 
     def _on_selection_changed(self, selected: list):
         self.edit_panel.set_books(selected)
@@ -194,7 +291,9 @@ class MainWindow(QMainWindow):
         for book in books:
             if book.file_format == "epub":
                 self._editor.save_epub_metadata(book)
+        self._data_manager.load_books(self._books)
         self.book_table.load_books(self._books)
+        self._apply_filters()
         self.statusBar().showMessage(f"已更新 {len(books)} 本书的元数据")
 
     def _on_search_meta_requested(self, books: list):
@@ -217,7 +316,9 @@ class MainWindow(QMainWindow):
                     self._editor.merge_from_source(book, data, overwrite=(overwrite == QMessageBox.StandardButton.Yes))
                     if book.file_format == "epub":
                         self._editor.save_epub_metadata(book)
+                self._data_manager.load_books(self._books)
                 self.book_table.load_books(self._books)
+                self._apply_filters()
                 self.statusBar().showMessage(f"已从在线源填充 {len(books)} 本书的元数据")
 
     def _on_convert_requested(self, books: list):
@@ -257,7 +358,9 @@ class MainWindow(QMainWindow):
                 self._books.append(book)
             except Exception:
                 self._books.append(BookMeta(file_path=f, file_format=Path(f).suffix.lstrip("."), title=Path(f).stem))
+        self._data_manager.load_books(self._books)
         self.book_table.load_books(self._books)
+        self._apply_filters()
         self.statusBar().showMessage(f"已导入 {len(new_files)} 本电子书")
 
     def _check_calibre(self):
