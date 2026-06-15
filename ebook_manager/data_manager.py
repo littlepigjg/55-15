@@ -329,11 +329,28 @@ class BookDataManager:
             total_pages=total_pages,
         )
 
+    def _condition_has_effect(self, condition: FilterCondition) -> bool:
+        if not condition.values:
+            return False
+
+        if condition.operator == "between":
+            has_min = len(condition.values) >= 1 and condition.values[0] is not None and str(condition.values[0]).strip() != ""
+            has_max = len(condition.values) >= 2 and condition.values[1] is not None and str(condition.values[1]).strip() != ""
+            return has_min or has_max
+
+        return True
+
     def _apply_filters_internal(self, extra_conditions: Optional[list[FilterCondition]] = None):
-        enabled_conditions = [c for c in self._filter_conditions if c.enabled and c.values]
+        enabled_conditions = [
+            c for c in self._filter_conditions
+            if c.enabled and self._condition_has_effect(c)
+        ]
 
         if extra_conditions:
-            enabled_conditions = enabled_conditions + [c for c in extra_conditions if c.enabled and c.values]
+            enabled_conditions = enabled_conditions + [
+                c for c in extra_conditions
+                if c.enabled and self._condition_has_effect(c)
+            ]
 
         if not enabled_conditions:
             return self._df.copy() if PANDAS_AVAILABLE else list(self._df)
@@ -411,12 +428,30 @@ class BookDataManager:
         elif op == "between":
             if len(values) >= 2:
                 try:
-                    min_val = float(values[0])
-                    max_val = float(values[1])
-                    if min_val > max_val:
-                        min_val, max_val = max_val, min_val
+                    min_val = None
+                    max_val = None
+
+                    if values[0] is not None and str(values[0]).strip() != "":
+                        min_val = float(values[0])
+                    if values[1] is not None and str(values[1]).strip() != "":
+                        max_val = float(values[1])
+
+                    if min_val is None and max_val is None:
+                        return pd.Series([True] * len(df))
+
                     num_series = pd.to_numeric(series, errors="coerce")
-                    return (num_series >= min_val) & (num_series <= max_val)
+                    mask = pd.Series([True] * len(df))
+
+                    if min_val is not None and max_val is not None:
+                        if min_val > max_val:
+                            min_val, max_val = max_val, min_val
+                        mask = (num_series >= min_val) & (num_series <= max_val)
+                    elif min_val is not None:
+                        mask = num_series >= min_val
+                    elif max_val is not None:
+                        mask = num_series <= max_val
+
+                    return mask
                 except (ValueError, TypeError):
                     pass
             return pd.Series([True] * len(df))
@@ -490,12 +525,27 @@ class BookDataManager:
         elif op == "between":
             if len(values) >= 2:
                 try:
-                    min_val = float(values[0])
-                    max_val = float(values[1])
-                    if min_val > max_val:
-                        min_val, max_val = max_val, min_val
+                    min_val = None
+                    max_val = None
+
+                    if values[0] is not None and str(values[0]).strip() != "":
+                        min_val = float(values[0])
+                    if values[1] is not None and str(values[1]).strip() != "":
+                        max_val = float(values[1])
+
+                    if min_val is None and max_val is None:
+                        return True
+
                     num_field = float(field_val)
-                    return min_val <= num_field <= max_val
+
+                    if min_val is not None and max_val is not None:
+                        if min_val > max_val:
+                            min_val, max_val = max_val, min_val
+                        return min_val <= num_field <= max_val
+                    elif min_val is not None:
+                        return num_field >= min_val
+                    elif max_val is not None:
+                        return num_field <= max_val
                 except (ValueError, TypeError):
                     pass
             return True
